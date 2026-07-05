@@ -1,0 +1,56 @@
+name: memory-market-report
+
+on:
+  schedule:
+    # GitHub Actionsのcronは UTC(JST-9)。数分〜15分遅延することがある
+    - cron: "10 23 * * 0-4"  # 08:10 JST(月〜金) 朝レポート
+    - cron: "0 3 * * 1-5"    # 12:00 JST(月〜金) 昼レポート
+    - cron: "0 13 * * 1-5"   # 22:00 JST(月〜金) 夜レポート
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "morning / noon / night (空欄なら時刻から自動判定)"
+        required: false
+        default: ""
+
+concurrency:
+  group: memory-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run report
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL || 'sonnet' }}
+        run: |
+          if [ -n "${{ github.event.inputs.mode }}" ]; then
+            python main.py --mode "${{ github.event.inputs.mode }}"
+          else
+            python main.py
+          fi
+
+      - name: Commit and push report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet && echo "No new report" && exit 0
+          git commit -m "report: $(ls -t reports/*.md | head -1 | xargs basename .md)"
+          git push
