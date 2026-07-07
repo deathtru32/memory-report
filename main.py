@@ -10,6 +10,7 @@ import datetime
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -48,6 +49,9 @@ def _normalize_env() -> dict:
     return env
 
 
+MAX_RETRIES = int(os.environ.get("CLAUDE_MAX_RETRIES", "3"))
+
+
 def generate_report(mode: str) -> str:
     """Claude Codeヘッドレスモードでレポートを生成して返す。"""
     env = _normalize_env()
@@ -65,19 +69,25 @@ def generate_report(mode: str) -> str:
         "--model", CLAUDE_MODEL,
         "--output-format", "text",
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=CLAUDE_TIMEOUT,
-        env=env,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
+
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=CLAUDE_TIMEOUT,
+            env=env,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+
+        last_err = (
             f"claude CLI failed (code {result.returncode}).\n"
             f"stderr: {result.stderr[-2000:]}\nstdout: {result.stdout[-500:]}"
         )
-    report = result.stdout.strip()
-    if not report:
-        raise RuntimeError("claude CLIの出力が空です")
-    return report
+        print(f"[warn] attempt {attempt}/{MAX_RETRIES} failed: {result.stdout.strip()[:200]}")
+        if attempt < MAX_RETRIES:
+            time.sleep(5)
+
+    raise RuntimeError(last_err)
 
 
 def save_report(mode: str, report: str) -> Path:
